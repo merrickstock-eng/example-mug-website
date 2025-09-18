@@ -1,0 +1,446 @@
+// script.js
+// Simple interactive customizer + cart logic.
+// No frameworks. Save images to localStorage as data URLs for preview in cart.
+
+(() => {
+  // ----- product data -----
+  const PRODUCTS = [
+    { id: 'classic-white', title: 'Classic White Mug', price: 12.00, desc: '11oz white ceramic. Great print area.' },
+    { id: 'premium-gloss', title: 'Premium Gloss Mug', price: 16.00, desc: '13oz premium glossy finish for vibrant prints.' },
+    { id: 'travel-tumbler', title: 'Travel Tumbler', price: 20.00, desc: '16oz stainless tumbler (animation placeholder).' }
+  ];
+
+  // DOM refs
+  const productsGrid = document.getElementById('products-grid');
+  const productSelect = document.getElementById('product-select');
+  const canvas = document.getElementById('mug-canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const upload = document.getElementById('upload');
+  const clearImageBtn = document.getElementById('clear-image');
+  const offsetX = document.getElementById('offsetX');
+  const offsetY = document.getElementById('offsetY');
+  const scaleInput = document.getElementById('scale');
+  const rotateInput = document.getElementById('rotate');
+  const candies = document.getElementById('candies');
+  const giftwrap = document.getElementById('giftwrap');
+  const messageInput = document.getElementById('message');
+  const priceDisplay = document.getElementById('price-display');
+  const addToCartBtn = document.getElementById('add-to-cart');
+  const downloadBtn = document.getElementById('download-preview');
+
+  // Cart
+  const cartCount = document.getElementById('cart-count');
+  const cartListEl = document.getElementById('cart-list');
+  const cartTotalEl = document.getElementById('cart-total');
+  const cartTotalRow = document.getElementById('cart-total-row');
+  const checkoutActions = document.getElementById('checkout-actions');
+  const emptyCart = document.getElementById('empty-cart');
+  const clearCartBtn = document.getElementById('clear-cart');
+  const checkoutBtn = document.getElementById('checkout');
+
+  // state
+  let activeImage = null;
+  let imageObj = null; // HTMLImageElement for uploaded logo
+  let state = {
+    productId: PRODUCTS[0].id,
+    offsetX: 0,
+    offsetY: 0,
+    scale: 0.6,
+    rotate: 0,
+    candies: 'none',
+    giftwrap: 'none',
+    message: '',
+  };
+
+  // init
+  function init(){
+    renderProducts();
+    populateProductSelect();
+    initCanvas();
+    bindControls();
+    loadCartUI();
+    updatePriceAndRender();
+  }
+
+  function renderProducts(){
+    productsGrid.innerHTML = '';
+    PRODUCTS.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'product-card';
+      card.innerHTML = `
+        <h3>${p.title}</h3>
+        <p class="small-muted">${p.desc}</p>
+        <div class="product-actions">
+          <div><strong>$${p.price.toFixed(2)}</strong></div>
+          <div><button class="btn" data-add="${p.id}">Buy</button></div>
+        </div>
+      `;
+      productsGrid.appendChild(card);
+    });
+
+    // quick buy buttons: add default (no customization) to cart
+    productsGrid.querySelectorAll('[data-add]').forEach(b => {
+      b.addEventListener('click', e => {
+        const id = e.currentTarget.dataset.add;
+        const prod = PRODUCTS.find(x => x.id === id);
+        addItemToCart({
+          title: prod.title,
+          productId: prod.id,
+          basePrice: prod.price,
+          previewDataUrl: null,
+          custom: false,
+          options: {}
+        });
+      });
+    });
+  }
+
+  function populateProductSelect(){
+    productSelect.innerHTML = '';
+    PRODUCTS.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.title} — $${p.price.toFixed(2)}`;
+      productSelect.appendChild(opt);
+    });
+    productSelect.addEventListener('change', e => {
+      state.productId = e.target.value;
+      updatePriceAndRender();
+    });
+  }
+
+  // Canvas mug drawing (simple stylized mug)
+  function initCanvas(){
+    // set background
+    draw();
+  }
+
+  function draw(){
+    // base
+    ctx.fillStyle = '#f3f6fb';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // mug body
+    const mugX = 60, mugY = 50, mugW = 320, mugH = 220;
+    drawMugBody(mugX, mugY, mugW, mugH);
+
+    // draw uploaded image onto mug area with transforms
+    if(imageObj){
+      // compute center of mug interior area
+      const areaX = mugX + 40, areaY = mugY + 30, areaW = mugW - 80, areaH = mugH - 60;
+      ctx.save();
+      // clip to mug interior
+      ctx.beginPath();
+      roundRectPath(ctx, areaX, areaY, areaW, areaH, 18);
+      ctx.clip();
+
+      // apply transforms
+      const cx = areaX + areaW/2 + Number(state.offsetX);
+      const cy = areaY + areaH/2 + Number(state.offsetY);
+      ctx.translate(cx, cy);
+      ctx.rotate(Number(state.rotate) * Math.PI/180);
+      ctx.scale(Number(state.scale), Number(state.scale));
+
+      // draw image centered at origin
+      const iw = imageObj.width;
+      const ih = imageObj.height;
+      // fit initial draw to 300px width for consistent scale
+      const drawW = 300 * (iw/Math.max(iw, ih));
+      const drawH = 300 * (ih/Math.max(iw, ih));
+      ctx.drawImage(imageObj, -drawW/2, -drawH/2, drawW, drawH);
+      ctx.restore();
+    }
+
+    // subtle shadow/shine
+    drawMugDetails(mugX, mugY, mugW, mugH);
+  }
+
+  function drawMugBody(x,y,w,h){
+    // base shadow ellipse
+    ctx.fillStyle = '#e6eef8';
+    ctx.beginPath();
+    ctx.ellipse(x + w/2, y + h + 8, w/2 - 20, 14, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // mug main
+    ctx.fillStyle = '#fff';
+    roundRect(ctx, x, y, w, h, 40);
+    ctx.strokeStyle = '#d7e3f5';
+    ctx.lineWidth = 2;
+    roundRect(ctx, x, y, w, h, 40, true);
+
+    // handle
+    ctx.beginPath();
+    ctx.fillStyle = '#fff';
+    ctx.ellipse(x + w - 10, y + h/2, 34, 48, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#d7e3f5';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  function drawMugDetails(x,y,w,h){
+    // top ellipse (mouth)
+    ctx.fillStyle = '#f8fbff';
+    ctx.beginPath();
+    ctx.ellipse(x + w/2, y + 14, w/2 - 8, 12, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // light reflection
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.ellipse(x + 60, y + 60, 30, 70, -0.6, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // helpers: draw rounded rects
+  function roundRect(ctx, x, y, w, h, r, strokeOnly=false){
+    ctx.beginPath();
+    roundRectPath(ctx,x,y,w,h,r);
+    if(strokeOnly) ctx.stroke();
+    else ctx.fill();
+  }
+  function roundRectPath(ctx,x,y,w,h,r){
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // file upload handling
+  upload.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+    const url = await toDataURL(file);
+    const img = new Image();
+    img.onload = () => {
+      imageObj = img;
+      // reset transforms a bit for convenience
+      state.offsetX = 0; offsetX.value = 0;
+      state.offsetY = 0; offsetY.value = 0;
+      state.scale = Math.min(0.8, (300 / Math.max(img.width, img.height)));
+      scaleInput.value = state.scale;
+      rotateInput.value = 0; state.rotate = 0;
+      updatePriceAndRender();
+    };
+    img.src = url;
+  });
+
+  clearImageBtn.addEventListener('click', () => {
+    imageObj = null;
+    upload.value = '';
+    updatePriceAndRender();
+  });
+
+  // controls bind
+  function bindControls(){
+    [offsetX, offsetY, scaleInput, rotateInput].forEach(el => {
+      el.addEventListener('input', () => {
+        state[el.id] = el.value;
+        updatePriceAndRender();
+      });
+    });
+
+    candies.addEventListener('change', () => {
+      state.candies = candies.value;
+      updatePriceAndRender();
+    });
+    giftwrap.addEventListener('change', () => {
+      state.giftwrap = giftwrap.value;
+      updatePriceAndRender();
+    });
+    messageInput.addEventListener('input', () => {
+      state.message = messageInput.value;
+    });
+
+    addToCartBtn.addEventListener('click', async () => {
+      // generate preview
+      const previewDataUrl = canvas.toDataURL('image/png');
+      const prod = PRODUCTS.find(p => p.id === state.productId);
+      const basePrice = prod ? prod.price : PRODUCTS[0].price;
+      const optionPrices = calcOptionPrices();
+      const total = (basePrice + optionPrices).toFixed(2);
+
+      addItemToCart({
+        title: prod.title + ' — customized',
+        productId: prod.id,
+        basePrice: basePrice,
+        previewDataUrl,
+        custom: true,
+        options: {
+          candies: state.candies,
+          giftwrap: state.giftwrap,
+          message: state.message,
+          transforms: {
+            offsetX: state.offsetX,
+            offsetY: state.offsetY,
+            scale: state.scale,
+            rotate: state.rotate
+          }
+        },
+        total: Number(total)
+      });
+
+      alert('Added to cart!');
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'mug-preview.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+
+    clearCartBtn.addEventListener('click', () => {
+      localStorage.removeItem('cm_cart');
+      loadCartUI();
+    });
+
+    checkoutBtn.addEventListener('click', () => {
+      alert('Checkout is a placeholder in this demo. Integrate a payment gateway (Stripe/PayPal) in production.');
+    });
+  }
+
+  // price calc
+  function calcOptionPrices(){
+    const candiesPrice = Number(candies.selectedOptions[0].dataset.price || 0);
+    const giftPrice = Number(giftwrap.selectedOptions[0].dataset.price || 0);
+    const customizationFee = imageObj ? 3.00 : 0; // small design handling fee
+    return candiesPrice + giftPrice + customizationFee;
+  }
+
+  function updatePriceAndRender(){
+    // update UI values
+    priceDisplay.textContent = `$${(PRODUCTS.find(p => p.id === state.productId).price + calcOptionPrices()).toFixed(2)}`;
+    // set ranges to state values
+    offsetX.value = state.offsetX;
+    offsetY.value = state.offsetY;
+    scaleInput.value = state.scale;
+    rotateInput.value = state.rotate;
+    // draw
+    draw();
+    // update cart count
+    updateCartCount();
+  }
+
+  // util: file to dataURL
+  function toDataURL(file){
+    return new Promise((res, rej) => {
+      const reader = new FileReader();
+      reader.onload = () => res(reader.result);
+      reader.onerror = rej;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Cart functions (localStorage-based)
+  function loadCart(){
+    try{
+      const raw = localStorage.getItem('cm_cart');
+      return raw ? JSON.parse(raw) : [];
+    }catch(e){
+      console.warn('cart load error', e);
+      return [];
+    }
+  }
+  function saveCart(arr){
+    localStorage.setItem('cm_cart', JSON.stringify(arr));
+    loadCartUI();
+  }
+  function addItemToCart(item){
+    const cart = loadCart();
+    // give unique id and timestamp
+    const entry = {
+      id: 'c_' + Date.now(),
+      createdAt: Date.now(),
+      ...item
+    };
+    cart.push(entry);
+    saveCart(cart);
+  }
+
+  function loadCartUI(){
+    const cart = loadCart();
+    cartListEl.innerHTML = '';
+    if(cart.length === 0){
+      emptyCart.classList.remove('hidden');
+      cartTotalRow.classList.add('hidden');
+      checkoutActions.classList.add('hidden');
+      cartCount.textContent = '0';
+      return;
+    }
+    emptyCart.classList.add('hidden');
+    cartTotalRow.classList.remove('hidden');
+    checkoutActions.classList.remove('hidden');
+    cartCount.textContent = String(cart.length);
+
+    let total = 0;
+    cart.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'cart-item';
+      const left = document.createElement('div');
+      left.style.display = 'flex';
+      left.style.gap = '10px';
+      left.style.alignItems = 'center';
+      if(item.previewDataUrl){
+        const img = document.createElement('img');
+        img.src = item.previewDataUrl;
+        img.width = 80; img.height = 60;
+        img.style.objectFit = 'cover';
+        img.style.borderRadius = '6px';
+        left.appendChild(img);
+      }
+      const meta = document.createElement('div');
+      meta.innerHTML = `<div style="font-weight:600">${escapeHtml(item.title)}</div>
+        <div class="small-muted">${item.custom ? 'Customized' : 'Standard'}</div>`;
+      left.appendChild(meta);
+
+      const right = document.createElement('div');
+      const price = typeof item.total === 'number' ? item.total : (item.basePrice || 0);
+      right.innerHTML = `<div style="font-weight:700">$${Number(price).toFixed(2)}</div>
+        <button class="btn small remove" data-id="${item.id}">Remove</button>`;
+      row.appendChild(left);
+      row.appendChild(right);
+      cartListEl.appendChild(row);
+      total += Number(price);
+    });
+
+    // wire remove buttons
+    cartListEl.querySelectorAll('.remove').forEach(b => {
+      b.addEventListener('click', (e) => {
+        const id = e.currentTarget.dataset.id;
+        const newCart = loadCart().filter(i => i.id !== id);
+        saveCart(newCart);
+      });
+    });
+
+    cartTotalEl.textContent = `$${total.toFixed(2)}`;
+  }
+
+  function updateCartCount(){
+    const len = loadCart().length;
+    cartCount.textContent = String(len);
+  }
+
+  // small helpers
+  function escapeHtml(s){
+    return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  // initialize UI values based on state
+  function seedStateUI(){
+    productSelect.value = state.productId;
+    offsetX.value = state.offsetX;
+    offsetY.value = state.offsetY;
+    scaleInput.value = state.scale;
+    rotateInput.value = state.rotate;
+    candies.value = state.candies;
+    giftwrap.value = state.giftwrap;
+  }
+
+  // init runner
+  seedStateUI();
+  init();
+})();
